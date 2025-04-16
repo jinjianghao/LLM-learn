@@ -1,37 +1,82 @@
-from llama_index.core import VectorStoreIndex, SimpleDirectoryReader
-from llama_index.vector_stores.chroma import ChromaVectorStore
-from llama_index.core import StorageContext
-from llama_index.embeddings.ollama import OllamaEmbedding  # 使用 Ollama 嵌入模型
-from IPython.display import Markdown, display
-import chromadb
-import os
-import getpass
+from typing import List
+from chromadb import Client
+from chromadb.config import Settings
+from ollama import Client as OllamaClient
 
-os.environ["OPENAI_API_KEY"] = getpass.getpass("OpenAI API Key:")
-import openai
+class RAGSystem:
+    def __init__(self):
+        self.chroma_client = Client()  # 不加参数
+        self.ollama_client = OllamaClient()
+        self.collection = self.chroma_client.get_or_create_collection(
+            name="documents",
+            metadata={"hnsw:space": "cosine"}
+        )
 
-openai.api_key = os.environ["OPENAI_API_KEY"]
+    def add_documents(self, documents: List[str], metadatas: List[dict] = None):
+        """将文档添加到Chroma中"""
+        ids = [f"doc_{i}" for i in range(len(documents))]
+        self.collection.add(
+            documents=documents,
+            ids=ids,
+            metadatas=metadatas
+        )
 
-from llama_index.llms.ollama import Ollama
+    def search_similar(self, query: str, k: int = 3) -> List[dict]:
+        """搜索与查询最相似的文档"""
+        results = self.collection.query(
+            query_texts=[query],
+            n_results=k
+        )
+        return results
 
-# create client and a new collection
-chroma_client = chromadb.EphemeralClient()
-chroma_collection = chroma_client.create_collection("quickstart")
+    def ask_question(self, question: str) -> str:
+        """使用Ollama生成回答"""
+        # 首先搜索相关文档
+        results = self.search_similar(question)
+        
+        # 准备上下文
+        context = "\n".join(results["documents"][0])
+        
+        # 使用Ollama生成回答
+        prompt = f"""
+        你是一个智能助手。请根据以下上下文回答问题：
+        
+        上下文：
+        {context}
+        
+        问题：{question}
+        
+        请给出详细且准确的回答。
+        """
+        
+        response = self.ollama_client.chat(
+            model="llama3",
+            messages=[
+                {"role": "user", "content": prompt}
+            ]
+        )
+        
+        return response["message"]["content"]
 
-# define embedding function
-embed_model = OllamaEmbedding(model_name="mistral")  # 使用本地 Ollama 嵌入模型
+# 使用示例
+def main():
+    # 创建RAG系统实例
+    rag = RAGSystem()
+    
+    # 添加文档
+    documents = [
+        "Python是一种高级编程语言，由Guido van Rossum在1991年发布。",
+        "Python的设计哲学是代码的可读性和简洁的语法。",
+        "Python支持多种编程范式，包括面向对象、命令式、函数式和过程式编程。"
+    ]
+    
+    rag.add_documents(documents)
+    
+    # 提问
+    question = "Python的设计哲学是什么？"
+    answer = rag.ask_question(question)
+    print(f"问题：{question}")
+    print(f"回答：{answer}")
 
-# load documents
-documents = SimpleDirectoryReader("./data/paul_graham/").load_data()
-
-# set up ChromaVectorStore and load in data
-vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
-storage_context = StorageContext.from_defaults(vector_store=vector_store)
-index = VectorStoreIndex.from_documents(
-    documents, storage_context=storage_context, embed_model=embed_model
-)
-
-# Query Data
-query_engine = index.as_query_engine()
-response = query_engine.query("What did the author do growing up?")
-display(Markdown(f"<b>{response}</b>"))
+if __name__ == "__main__":
+    main()
