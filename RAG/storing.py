@@ -1,27 +1,37 @@
-import chromadb
 from llama_index.core import VectorStoreIndex, SimpleDirectoryReader
-from llama_index.vector_stores import ChromaVectorStore
+from llama_index.vector_stores.chroma import ChromaVectorStore
 from llama_index.core import StorageContext
+from llama_index.embeddings.ollama import OllamaEmbedding  # 使用 Ollama 嵌入模型
+from IPython.display import Markdown, display
+import chromadb
+import os
+import getpass
 
-# load some documents
-documents = SimpleDirectoryReader("./data").load_data()
+os.environ["OPENAI_API_KEY"] = getpass.getpass("OpenAI API Key:")
+import openai
 
-# initialize client, setting path to save data
-db = chromadb.PersistentClient(path="./chroma_db")
+openai.api_key = os.environ["OPENAI_API_KEY"]
 
-# create collection
-chroma_collection = db.get_or_create_collection("quickstart")
+from llama_index.llms.ollama import Ollama
 
-# assign chroma as the vector_store to the context
+# create client and a new collection
+chroma_client = chromadb.EphemeralClient()
+chroma_collection = chroma_client.create_collection("quickstart")
+
+# define embedding function
+embed_model = OllamaEmbedding(model_name="mistral")  # 使用本地 Ollama 嵌入模型
+
+# load documents
+documents = SimpleDirectoryReader("./data/paul_graham/").load_data()
+
+# set up ChromaVectorStore and load in data
 vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
 storage_context = StorageContext.from_defaults(vector_store=vector_store)
-
-# create your index
 index = VectorStoreIndex.from_documents(
-    documents, storage_context=storage_context
+    documents, storage_context=storage_context, embed_model=embed_model
 )
 
-# create a query engine and query
+# Query Data
 query_engine = index.as_query_engine()
-response = query_engine.query("What is the meaning of life?")
-print(response)
+response = query_engine.query("What did the author do growing up?")
+display(Markdown(f"<b>{response}</b>"))
